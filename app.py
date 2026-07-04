@@ -186,9 +186,9 @@ def render_overview_tab(df):
     st.markdown("---")
     col1, col2 = st.columns([6, 5])
     with col1:
-        with st.spinner("加载重庆房价热力图..."):
+        with st.spinner("加载重庆区县分布..."):
             from charts import create_chongqing_heatmap
-            html = _safe_chart(create_chongqing_heatmap, df, "热力图")
+            html = _safe_chart(create_chongqing_heatmap, df, "区县分布图")
             if html:
                 st.components.v1.html(html, height=640, scrolling=False)
     with col2:
