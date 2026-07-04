@@ -17,3 +17,7 @@ streamlit_out.log
 # OS
 .DS_Store
 Thumbs.db
+
+# Test files
+_inspect_geo.py
+_test_*.py

@@ -130,7 +130,7 @@ def create_chongqing_heatmap(df, price_col="均价_数值"):
                 pos_left="center"
             ),
             visualmap_opts=opts.VisualMapOpts(
-                is_continuous=True,
+                is_piecewise=False,
                 min_=vmin,
                 max_=vmax,
                 range_color=["#f0f9e8", "#bae4bc", "#7bccc4", "#43a2ca", "#0868ac"],
