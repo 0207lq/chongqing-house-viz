@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.log
+
+# Streamlit
+.streamlit/streamlit_out.log
+.streamlit/streamlit_err.log
+streamlit_err.log
+streamlit_out.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
