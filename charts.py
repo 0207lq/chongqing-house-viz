@@ -36,124 +36,53 @@ def _empty_chart(message="暂无数据"):
 
 # ==================== 地图名称映射 ====================
 
-def _build_district_name_mapping(geo_json_path="data/chongqing_geo.json"):
-    """
-    建立数据中的区县名 → GeoJSON 标准区县名的映射
-
-    数据中: "渝北", "江北", "酉阳"
-    GeoJSON中: "渝北区", "江北区", "酉阳土家族苗族自治县"
-    """
-    # 尝试加载 GeoJSON
-    geo_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), geo_json_path)
-    if not os.path.exists(geo_file):
-        return {}
-
-    with open(geo_file, "r", encoding="utf-8") as f:
-        geo_data = json.load(f)
-
-    geo_names = [f["properties"]["name"] for f in geo_data["features"]]
-
-    mapping = {}
-    for gname in geo_names:
-        # 精确匹配
-        mapping[gname] = gname
-
-        # 去掉区/县后缀
-        for suffix in ["区", "县"]:
-            if gname.endswith(suffix):
-                short = gname[:-1]
-                mapping[short] = gname
-                break
-
-        # 特殊处理自治县/自治区的长名称
-        # 如果 name 包含 "土家族"、"苗族" 等，保留原始匹配
-        # "酉阳土家族苗族自治县" → data中可能是 "酉阳"
-        for special_suffix in ["土家族苗族自治县", "土家族自治县", "苗族土家族自治县"]:
-            if gname.endswith(special_suffix):
-                core = gname.replace(special_suffix, "")
-                mapping[core] = gname
-                break
-
-    return mapping
-
-
-# ==================== 1. 重庆地图热力图（Choropleth） ====================
+# ==================== 1. 重庆各区县分布总览 ====================
 
 def create_chongqing_heatmap(df, price_col="均价_数值"):
     """
-    重庆各区县分布总览 - 使用 Map 图表显示区县轮廓+标签
-    所有区县统一颜色，仅展示地图轮廓，不编码价格
-    鼠标悬停显示：区县名、房源数量、均价
+    重庆各区县房源数量排名 - 横向条形图
+    展示房源数量Top20区县，颜色=房源数渐变
+    替代地图展示（避免CDN地图数据在云端加载失败）
     """
     if df.empty:
         return _empty_chart("暂无数据")
 
-    # 按城区聚合数据
     stats = df.groupby("所属城区").agg(
         count=("标题", "count"),
         price=("均价_数值", "mean")
-    ).reset_index()
+    ).reset_index().sort_values("count", ascending=False).head(20)
 
-    # 简单名称映射：渝北 → 渝北区
-    name_map = _build_district_name_mapping()
-    data_pairs = []
-    for _, row in stats.iterrows():
-        d = row["所属城区"]
-        map_name = name_map.get(d, d)
-        # 用1作为占位值（所有区县同色）
-        data_pairs.append((map_name, 1))
+    if stats.empty:
+        return _empty_chart("暂无数据")
 
-    if not data_pairs:
-        return _empty_chart("暂无地图数据")
-
-    # 构建房源数 + 价格查询表（自定义 tooltip 用）
-    detail_map = {}
-    for _, row in stats.iterrows():
-        d = row["所属城区"]
-        map_name = name_map.get(d, d)
-        detail_map[map_name] = {
-            "count": int(row["count"]),
-            "price": round(row["price"], 0)
-        }
-    import json as _json
-    detail_js = _json.dumps(detail_map, ensure_ascii=False)
+    districts = stats["所属城区"].tolist()[::-1]  # 反转，让最高的在上面
+    counts = stats["count"].tolist()[::-1]
 
     chart = (
-        Map(init_opts=opts.InitOpts(width="100%", height="600px", theme=ThemeType.LIGHT))
-        .add(
-            "",
-            data_pairs,
-            maptype="重庆",
-            is_map_symbol_show=False,
-            label_opts=opts.LabelOpts(is_show=True, color="#333", font_size=10),
-            tooltip_opts=opts.TooltipOpts(trigger="item",
-                formatter=JsCode(f"""
-                    function(params) {{
-                        var detail = {detail_js};
-                        var info = detail[params.name] || {{}};
-                        return params.name + '<br/>房源数: ' + (info.count || '-') + ' 套<br/>均价: ' + (info.price || '-') + ' 元/㎡';
-                    }}
-                """)),
+        Bar(init_opts=opts.InitOpts(width="100%", height="600px", theme=ThemeType.LIGHT))
+        .add_xaxis(districts)
+        .add_yaxis(
+            "房源数量",
+            counts,
+            label_opts=opts.LabelOpts(is_show=True, position="right", font_size=11),
+            itemstyle_opts=opts.ItemStyleOpts(
+                color=JsCode("new echarts.graphic.LinearGradient(0,0,1,0,[{offset:0,color:'#B3D9FF'},{offset:1,color:'#1E88E5'}])")
+            ),
         )
+        .reversal_axis()  # 横向柱状图
         .set_global_opts(
             title_opts=opts.TitleOpts(
-                title="重庆各区县分布总览",
-                subtitle="鼠标悬停查看各区县房源数量和均价",
-                pos_left="center"
+                title="重庆各区县房源数量Top20",
+                subtitle="横轴 = 房源数量（套）",
+                pos_left="center",
             ),
-            tooltip_opts=opts.TooltipOpts(trigger="item"),
-            # 统一颜色
-            visualmap_opts=opts.VisualMapOpts(is_show=False),
-        )
-        .set_series_opts(
-            itemstyle_opts=opts.ItemStyleOpts(
-                color="#B0BEC5",
-                border_color="#fff",
-                border_width=1,
+            xaxis_opts=opts.AxisOpts(name="房源数量", axislabel_opts=opts.LabelOpts(font_size=10)),
+            yaxis_opts=opts.AxisOpts(
+                name="区县",
+                axislabel_opts=opts.LabelOpts(font_size=10),
             ),
-            emphasis_opts=opts.EmphasisOpts(
-                itemstyle_opts=opts.ItemStyleOpts(area_color="#90A4AE", border_color="#fff")
-            ),
+            tooltip_opts=opts.TooltipOpts(trigger="axis", axis_pointer_type="shadow"),
+            legend_opts=opts.LegendOpts(is_show=False),
         )
     )
     return chart
