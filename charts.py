@@ -5,12 +5,14 @@ charts.py - Pyecharts 图表生成模块
 """
 
 import pyecharts.options as opts
-from pyecharts.charts import Bar, Scatter, HeatMap, Pie, Line, Page, Geo
-from pyecharts.globals import ThemeType, GeoType
+from pyecharts.charts import Bar, Scatter, HeatMap, Pie, Line, Page, Map
+from pyecharts.globals import ThemeType
 from pyecharts.commons.utils import JsCode
 import pandas as pd
 import numpy as np
 import re
+import json
+import os
 
 COLOR_SEQUENCE = [
     "#1E88E5", "#43A047", "#FFB300", "#E53935",
@@ -32,7 +34,129 @@ def _empty_chart(message="暂无数据"):
     return chart
 
 
-# ==================== 1. 价格分布柱状图 ====================
+# ==================== 地图名称映射 ====================
+
+def _build_district_name_mapping(geo_json_path="data/chongqing_geo.json"):
+    """
+    建立数据中的区县名 → GeoJSON 标准区县名的映射
+
+    数据中: "渝北", "江北", "酉阳"
+    GeoJSON中: "渝北区", "江北区", "酉阳土家族苗族自治县"
+    """
+    # 尝试加载 GeoJSON
+    geo_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), geo_json_path)
+    if not os.path.exists(geo_file):
+        return {}
+
+    with open(geo_file, "r", encoding="utf-8") as f:
+        geo_data = json.load(f)
+
+    geo_names = [f["properties"]["name"] for f in geo_data["features"]]
+
+    mapping = {}
+    for gname in geo_names:
+        # 精确匹配
+        mapping[gname] = gname
+
+        # 去掉区/县后缀
+        for suffix in ["区", "县"]:
+            if gname.endswith(suffix):
+                short = gname[:-1]
+                mapping[short] = gname
+                break
+
+        # 特殊处理自治县/自治区的长名称
+        # 如果 name 包含 "土家族"、"苗族" 等，保留原始匹配
+        # "酉阳土家族苗族自治县" → data中可能是 "酉阳"
+        for special_suffix in ["土家族苗族自治县", "土家族自治县", "苗族土家族自治县"]:
+            if gname.endswith(special_suffix):
+                core = gname.replace(special_suffix, "")
+                mapping[core] = gname
+                break
+
+    return mapping
+
+
+# ==================== 1. 重庆地图热力图（Choropleth） ====================
+
+def create_chongqing_heatmap(df, price_col="均价_数值"):
+    """
+    重庆各区县房价热力图 - 改用 Map 图表（在浏览器端加载地图数据）
+    支持悬停显示各区县名称和均价
+    """
+    if df.empty:
+        return _empty_chart("暂无数据")
+
+    # 聚合各城区均价
+    district_avg = df.groupby("所属城区")[price_col].mean().reset_index()
+    if district_avg.empty:
+        return _empty_chart("暂无地图数据")
+
+    # 建立名称映射
+    name_map = _build_district_name_mapping()
+
+    # 构建数据对，将数据中的区名映射到地图中的标准区名
+    data_pairs = []
+    skipped = []
+    for _, row in district_avg.iterrows():
+        d = row["所属城区"]
+        map_name = name_map.get(d, d)
+        if map_name != d or d in name_map or d.endswith("区") or d.endswith("县"):
+            data_pairs.append((map_name, round(row[price_col], 0)))
+        else:
+            skipped.append(d)
+
+    if not data_pairs:
+        return _empty_chart("暂无匹配的地图数据")
+
+    # 找到价格范围用于颜色映射
+    prices = [p[1] for p in data_pairs]
+    vmin, vmax = min(prices), max(prices)
+
+    chart = (
+        Map(init_opts=opts.InitOpts(width="100%", height="600px", theme=ThemeType.LIGHT))
+        .add(
+            "均价 (元/㎡)",
+            data_pairs,
+            maptype="重庆",
+            is_map_symbol_show=False,
+            label_opts=opts.LabelOpts(is_show=True, color="#333", font_size=10),
+            tooltip_opts=opts.TooltipOpts(trigger="item", formatter="{b}<br/>均价: {c} 元/㎡"),
+        )
+        .set_global_opts(
+            title_opts=opts.TitleOpts(
+                title="重庆各区房价分布",
+                subtitle="颜色越深 → 房价越高 | 鼠标悬停查看详情",
+                pos_left="center"
+            ),
+            visualmap_opts=opts.VisualMapOpts(
+                is_continuous=True,
+                min_=vmin,
+                max_=vmax,
+                range_color=["#f0f9e8", "#bae4bc", "#7bccc4", "#43a2ca", "#0868ac"],
+                pos_left="left",
+                pos_bottom="bottom",
+                textstyle_opts=opts.TextStyleOpts(color="#333"),
+            ),
+            tooltip_opts=opts.TooltipOpts(trigger="item", formatter="{b}<br/>均价: {c} 元/㎡"),
+        )
+        .set_series_opts(
+            itemstyle_opts=opts.ItemStyleOpts(border_color="#fff", border_width=1),
+            emphasis_opts=opts.EmphasisOpts(
+                itemstyle_opts=opts.ItemStyleOpts(area_color="#FF6F00", border_color="#fff")
+            ),
+        )
+    )
+
+    # 如果有跳过的区县，添加注释
+    if skipped:
+        # 图表底部加一行注释（可选）
+        pass
+
+    return chart
+
+
+# ==================== 2. 价格分布柱状图 ====================
 
 def create_price_distribution_chart(df, price_col="均价_数值", bins=15):
     if df.empty:
@@ -41,12 +165,9 @@ def create_price_distribution_chart(df, price_col="均价_数值", bins=15):
     if len(prices) == 0:
         return _empty_chart("暂无价格数据")
 
-    # 用百分位截断极端值（0.5%~99.5%），避免单条数据拉宽所有箱体
     low = prices.quantile(0.005)
     high = prices.quantile(0.995)
-    # 生成 15 个等宽箱的边界
     bin_edges = np.linspace(low, high, bins + 1)
-    # 边界取整到百位，方便阅读
     bin_edges = np.round(bin_edges / 100) * 100
 
     labels = []
@@ -82,16 +203,12 @@ def create_price_distribution_chart(df, price_col="均价_数值", bins=15):
     return chart
 
 
-# ==================== 2. 面积-均价散点图（每个区域一个点） ====================
+# ==================== 3. 面积-均价散点图（每个区域一个点） ====================
 
 def create_scatter_chart(df, price_col="均价_数值", area_col="面积_数值"):
-    """
-    面积-均价散点图：每个区域一个点，X=平均面积，Y=平均价格
-    """
     if df.empty:
         return _empty_chart("暂无数据")
 
-    # 按区域聚合，过滤小样本
     stats = df.groupby("所属城区").agg(
         avg_area=(area_col, "mean"),
         avg_price=(price_col, "mean"),
@@ -103,7 +220,6 @@ def create_scatter_chart(df, price_col="均价_数值", area_col="面积_数值"
 
     district_colors = get_district_colors(stats["所属城区"].tolist())
 
-    # 构建 dict 格式数据：每点独立配 name、color、label
     data_items = []
     for _, r in stats.iterrows():
         d = r["所属城区"]
@@ -141,7 +257,7 @@ def create_scatter_chart(df, price_col="均价_数值", area_col="面积_数值"
     return scatter
 
 
-# ==================== 3. 各区域均价对比 ====================
+# ==================== 4. 各区域均价对比 ====================
 
 def create_district_avg_price_chart(df, price_col="均价_数值"):
     if df.empty:
@@ -163,7 +279,7 @@ def create_district_avg_price_chart(df, price_col="均价_数值"):
     return chart
 
 
-# ==================== 4. 价格热力图（区域×户型） ====================
+# ==================== 5. 价格热力图（区域×户型） ====================
 
 def create_price_heatmap(df, price_col="均价_数值"):
     if df.empty:
@@ -182,7 +298,6 @@ def create_price_heatmap(df, price_col="均价_数值"):
         for j, h in enumerate(huxing_types):
             raw = pivot.loc[d, h]
             if pd.isna(raw):
-                # 无数据 → 值设为 -1，颜色单独标记
                 heat_data.append([j, i, -1])
             else:
                 val = round(raw, 0)
@@ -194,8 +309,6 @@ def create_price_heatmap(df, price_col="均价_数值"):
 
     vmin, vmax = int(min(non_zero_vals)), int(max(non_zero_vals))
 
-    # 颜色分段：无数据显示灰色，有数据按固定区间分色（浅黄→橙→深红）
-    # 用固定区间而非百分位，确保颜色梯度在视觉上均匀
     pieces = [
         {"min": -1, "max": 0, "color": "#E8E8E8", "label": "无数据"},
         {"min": 1, "max": 8000, "color": "#FFFFCC", "label": "≤8000"},
@@ -207,7 +320,6 @@ def create_price_heatmap(df, price_col="均价_数值"):
         {"min": 20001, "max": max(vmax, 20001), "color": "#BD0026", "label": "≥20000"},
     ]
 
-    # 工具提示：显示实际的区域名和户型名
     import json as _json
     districts_js = _json.dumps(districts, ensure_ascii=False)
     huxing_js = _json.dumps(huxing_types, ensure_ascii=False)
@@ -237,54 +349,6 @@ def create_price_heatmap(df, price_col="均价_数值"):
     return chart
 
 
-# ==================== 5. 重庆地图（热力分布） ====================
-
-def create_chongqing_heatmap(df, price_col="均价_数值"):
-    """
-    重庆地图 - 各区县用圆点标注均价，鼠标悬停显示区县名+均价
-    基于 Geo 图表 + scatter 标注，不使用 Map（避免区县名匹配问题）
-    """
-    if df.empty:
-        return _empty_chart("暂无数据")
-
-    from config import CHONGQING_DISTRICTS
-    coord_dict = {d["name"]: [d["lng"], d["lat"]] for d in CHONGQING_DISTRICTS}
-
-    # 聚合各城区均价
-    district_avg = df.groupby("所属城区")[price_col].mean().reset_index()
-    # 只保留有坐标的区县
-    district_avg = district_avg[district_avg["所属城区"].isin(coord_dict)]
-    if district_avg.empty:
-        return _empty_chart("暂无地图数据")
-
-    # 构建 Geo 图表，用 map 作为底图
-    geo = Geo(init_opts=opts.InitOpts(width="100%", height="600px", theme=ThemeType.LIGHT))
-    geo.add_schema(maptype="重庆",
-        itemstyle_opts=opts.ItemStyleOpts(border_color="#fff", border_width=1, area_color="#F0F0F0"),
-        label_opts=opts.LabelOpts(is_show=True, color="#333", font_size=9),
-        emphasis_itemstyle_opts=opts.ItemStyleOpts(area_color="#E0E0E0"))
-
-    # 注册坐标并添加散点
-    data_pairs = []
-    for _, row in district_avg.iterrows():
-        d = row["所属城区"]
-        if d in coord_dict:
-            geo.add_coordinate(d, coord_dict[d][0], coord_dict[d][1])
-            data_pairs.append((d, round(row[price_col], 0)))
-
-    geo.add("均价 (元/㎡)", data_pairs,
-        type_=GeoType.SCATTER,
-        symbol_size=10,
-        label_opts=opts.LabelOpts(is_show=True, formatter="{b}", font_size=10, color="#333"),
-        tooltip_opts=opts.TooltipOpts(trigger="item",
-            formatter=JsCode("function(p){return p.name+'<br/>均价: '+p.value[2]+' 元/㎡';}")))
-
-    geo.set_global_opts(
-        title_opts=opts.TitleOpts(title="重庆各区房价", subtitle="悬停查看各区均价 | 圆点越大价格越高", pos_left="center"),
-        tooltip_opts=opts.TooltipOpts(trigger="item", formatter="{b}<br/>均价: {c} 元/㎡"))
-    return geo
-
-
 # ==================== 6. 面积-总价散点图（带趋势线） ====================
 
 def create_area_total_trend_scatter(df):
@@ -297,10 +361,8 @@ def create_area_total_trend_scatter(df):
     if len(data) > 2000:
         data = data.sample(2000, random_state=42)
 
-    # 散点数据：坐标对 [面积, 总价]
     scatter_data = [[round(row["面积_数值"], 1), round(row["总价_数值"], 1)] for _, row in data.iterrows()]
 
-    # 趋势线
     from sklearn.linear_model import LinearRegression
     X = data[["面积_数值"]].values
     y = data["总价_数值"].values
@@ -310,13 +372,11 @@ def create_area_total_trend_scatter(df):
     trend_data = [[round(float(x_range[i]), 1), round(float(y_pred[i]), 1)] for i in range(len(x_range))]
 
     scatter = Scatter(init_opts=opts.InitOpts(width="100%", height="450px", theme=ThemeType.LIGHT))
-    # 必须调用 add_xaxis([]) 初始化内部数据结构，再通过坐标对传值
     scatter.add_xaxis([])
     scatter.add_yaxis("房源", scatter_data,
         symbol_size=5, label_opts=opts.LabelOpts(is_show=False),
         itemstyle_opts=opts.ItemStyleOpts(color="#1E88E5", opacity=0.5))
 
-    # 趋势线：也用坐标对格式，overlap 合并到 scatter
     from pyecharts.charts import Line as OverlayLine
     line_chart = (
         OverlayLine()
@@ -331,23 +391,18 @@ def create_area_total_trend_scatter(df):
     scatter.set_global_opts(
         title_opts=opts.TitleOpts(title="面积与总价关系分析", pos_left="center"),
         xaxis_opts=opts.AxisOpts(
-            name="面积 (㎡)",
-            type_="value",
-            min_=0,
+            name="面积 (㎡)", type_="value", min_=0,
             axislabel_opts=opts.LabelOpts(font_size=10),
             splitline_opts=opts.SplitLineOpts(is_show=True, linestyle_opts=opts.LineStyleOpts(type_="dashed", opacity=0.2)),
         ),
         yaxis_opts=opts.AxisOpts(
-            name="总价 (万元)",
-            type_="value",
-            min_=0,
+            name="总价 (万元)", type_="value", min_=0,
             axislabel_opts=opts.LabelOpts(font_size=10),
             splitline_opts=opts.SplitLineOpts(is_show=True, linestyle_opts=opts.LineStyleOpts(type_="dashed", opacity=0.2)),
         ),
         tooltip_opts=opts.TooltipOpts(trigger="item",
             formatter=JsCode("function(p) { return '面积: ' + p.value[0] + ' ㎡<br/>总价: ' + p.value[1] + ' 万元'; }")),
         legend_opts=opts.LegendOpts(pos_bottom="0%", pos_left="center"))
-    # 图例只保留"房源"，去掉"趋势线"
     legend_data = scatter.options.get("legend", [{}])[0].get("data", [])
     scatter.options["legend"][0]["data"] = [d for d in legend_data if d == "房源"]
     return scatter
@@ -423,7 +478,6 @@ def create_decoration_bar_chart(df):
         return _empty_chart("暂无数据")
     from analysis import get_decoration_distribution, get_price_summary_by_deco
     dist = get_decoration_distribution(df)
-    price_stats = get_price_summary_by_deco(df)
     if dist.empty:
         return _empty_chart("暂无数据")
 
@@ -458,7 +512,6 @@ def create_clustering_scatter(df):
     if data.empty:
         return _empty_chart("聚类数据不足")
 
-    # 每类最多采样1000条
     cluster_colors = {"经济型": "#43A047", "改善型": "#1E88E5", "豪宅": "#E53935", "老破小": "#8E24AA", "未知": "#BDBDBD"}
     cluster_order = ["经济型", "改善型", "豪宅", "老破小", "未知"]
 
@@ -471,7 +524,6 @@ def create_clustering_scatter(df):
             continue
         if len(d) > 1000:
             d = d.sample(1000, random_state=42)
-        # 使用 [x, y] 数据对格式
         pairs = [[round(row["面积_数值"], 1), round(row["总价_数值"], 1)]
                  for _, row in d.iterrows()]
         scatter.add_yaxis(cat, pairs,
@@ -481,22 +533,17 @@ def create_clustering_scatter(df):
     scatter.set_global_opts(
         title_opts=opts.TitleOpts(title="房源聚类分布（KMeans）", pos_left="center", pos_top="0"),
         xaxis_opts=opts.AxisOpts(
-            name="面积 (㎡)",
-            type_="value",
-            min_=0,
+            name="面积 (㎡)", type_="value", min_=0,
             axislabel_opts=opts.LabelOpts(font_size=10),
             splitline_opts=opts.SplitLineOpts(is_show=True, linestyle_opts=opts.LineStyleOpts(type_="dashed", opacity=0.2)),
         ),
         yaxis_opts=opts.AxisOpts(
-            name="总价 (万元)",
-            type_="value",
-            min_=0,
+            name="总价 (万元)", type_="value", min_=0,
             axislabel_opts=opts.LabelOpts(font_size=10),
             splitline_opts=opts.SplitLineOpts(is_show=True, linestyle_opts=opts.LineStyleOpts(type_="dashed", opacity=0.2)),
         ),
         tooltip_opts=opts.TooltipOpts(trigger="item",
             formatter=JsCode("function(p) { return p.seriesName + '<br/>面积: ' + p.value[0] + ' ㎡<br/>总价: ' + p.value[1] + ' 万元'; }")),
         legend_opts=opts.LegendOpts(pos_bottom="40", pos_left="center"))
-    # 增加标题与散点图间距（title top=5 → grid top=65 间距60px）
     scatter.options["grid"] = [{"top": 65}]
     return scatter

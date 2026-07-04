@@ -167,6 +167,16 @@ def render_kpi_cards(summary):
 
 # ==================== Tab0: 数据总览 ====================
 
+def _safe_chart(chart_func, df, fallback_msg="图表加载失败"):
+    """安全渲染图表，出错时显示提示信息而非崩溃"""
+    try:
+        chart = chart_func(df)
+        return chart.render_embed()
+    except Exception as e:
+        st.warning(f"⚠️ {fallback_msg}：{str(e)[:80]}")
+        return None
+
+
 def render_overview_tab(df):
     st.markdown("## 📊 数据概览")
     summary = summarize_data(df)
@@ -178,21 +188,29 @@ def render_overview_tab(df):
     with col1:
         with st.spinner("加载重庆房价热力图..."):
             from charts import create_chongqing_heatmap
-            st.components.v1.html(create_chongqing_heatmap(df).render_embed(), height=640, scrolling=False)
+            html = _safe_chart(create_chongqing_heatmap, df, "热力图")
+            if html:
+                st.components.v1.html(html, height=640, scrolling=False)
     with col2:
         with st.spinner("加载价格分布..."):
             from charts import create_price_distribution_chart
-            st.components.v1.html(create_price_distribution_chart(df).render_embed(), height=480, scrolling=False)
+            html = _safe_chart(create_price_distribution_chart, df, "价格分布图")
+            if html:
+                st.components.v1.html(html, height=480, scrolling=False)
 
     col3, col4 = st.columns([5, 6])
     with col3:
         with st.spinner("加载区域均价..."):
             from charts import create_district_avg_price_chart
-            st.components.v1.html(create_district_avg_price_chart(df).render_embed(), height=480, scrolling=False)
+            html = _safe_chart(create_district_avg_price_chart, df, "区域均价图")
+            if html:
+                st.components.v1.html(html, height=480, scrolling=False)
     with col4:
         with st.spinner("加载价格热力图..."):
             from charts import create_price_heatmap
-            st.components.v1.html(create_price_heatmap(df).render_embed(), height=520, scrolling=False)
+            html = _safe_chart(create_price_heatmap, df, "价格热力图")
+            if html:
+                st.components.v1.html(html, height=520, scrolling=False)
 
     # ====== 数据分析报告 ======
     st.markdown("---")
