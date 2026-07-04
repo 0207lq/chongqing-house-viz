@@ -81,14 +81,21 @@ def _build_district_name_mapping(geo_json_path="data/chongqing_geo.json"):
 
 def create_chongqing_heatmap(df, price_col="均价_数值"):
     """
-    重庆各区县房价热力图 - 改用 Map 图表（在浏览器端加载地图数据）
-    支持悬停显示各区县名称和均价
+    重庆各区县房价热力图 - 用中位数代替均值，自动过滤异常值
     """
     if df.empty:
         return _empty_chart("暂无数据")
 
-    # 聚合各城区均价
-    district_avg = df.groupby("所属城区")[price_col].mean().reset_index()
+    # 过滤异常值：去掉两端 1%
+    clean_df = df.copy()
+    valid = clean_df[price_col].dropna()
+    if len(valid) > 0:
+        low = valid.quantile(0.01)
+        high = valid.quantile(0.99)
+        clean_df = clean_df[(clean_df[price_col] >= low) & (clean_df[price_col] <= high)]
+
+    # 用中位数聚合（比均值更抗异常值）
+    district_avg = clean_df.groupby("所属城区")[price_col].median().reset_index()
     if district_avg.empty:
         return _empty_chart("暂无地图数据")
 

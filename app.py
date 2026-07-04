@@ -152,7 +152,7 @@ def render_kpi_cards(summary):
     with col1:
         st.metric("🏘️ 总房源", f"{summary['total']:,}")
     with col2:
-        st.metric("💰 均价", f"{summary['avg_price']:,.0f}", "元/㎡")
+        st.metric("💰 均价", f"{summary['median_price']:,.0f}", "元/㎡（中位数）")
     with col3:
         st.metric("📏 平均面积", f"{summary['avg_area']:.1f}", "㎡")
     with col4:
