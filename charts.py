@@ -81,101 +81,82 @@ def _build_district_name_mapping(geo_json_path="data/chongqing_geo.json"):
 
 def create_chongqing_heatmap(df, price_col="均价_数值"):
     """
-    重庆各区县房源分布 - 展示房源数量分布（数据可靠）
-    每个区县一个散点，颜色按区域分组区分，大小=房源数量
-    价格信息在tooltip中展示，不依赖颜色编码
+    重庆各区县分布总览 - 使用 Map 图表显示区县轮廓+标签
+    所有区县统一颜色，仅展示地图轮廓，不编码价格
+    鼠标悬停显示：区县名、房源数量、均价
     """
     if df.empty:
         return _empty_chart("暂无数据")
 
-    from config import CHONGQING_DISTRICTS
-    import json as _json
-    coord_dict = {d["name"]: [d["lng"], d["lat"]] for d in CHONGQING_DISTRICTS}
-
-    # 按城区聚合
+    # 按城区聚合数据
     stats = df.groupby("所属城区").agg(
         count=("标题", "count"),
         price=("均价_数值", "mean")
     ).reset_index()
-    stats = stats[stats["所属城区"].isin(coord_dict)]
-    if stats.empty:
+
+    # 简单名称映射：渝北 → 渝北区
+    name_map = _build_district_name_mapping()
+    data_pairs = []
+    for _, row in stats.iterrows():
+        d = row["所属城区"]
+        map_name = name_map.get(d, d)
+        # 用1作为占位值（所有区县同色）
+        data_pairs.append((map_name, 1))
+
+    if not data_pairs:
         return _empty_chart("暂无地图数据")
 
-    # ---- 按区域分组 ----
-    core_districts = ["渝中", "江北", "渝北", "南岸", "九龙坡", "沙坪坝"]
-    urban_districts = ["大渡口", "巴南", "北碚", "两江新区"]
-
-    def get_group(name):
-        if name in core_districts:
-            return "主城核心"
-        elif name in urban_districts:
-            return "主城区"
-        return "其他区县"
-
-    group_color = {"主城核心": "#1E88E5", "主城区": "#43A047", "其他区县": "#BDBDBD"}
-    stats["group"] = stats["所属城区"].apply(get_group)
-
-    # 预计算：房源数 → 圆点大小（6~24）
-    max_c = stats["count"].max()
-    size_map = {}
-    for _, r in stats.iterrows():
-        size_map[r["所属城区"]] = max(6, min(24, int((r["count"] / max_c) ** 0.5 * 24)))
-
-    # 构建 Geo
-    from pyecharts.charts import Geo
-    from pyecharts.globals import GeoType
-
-    geo = Geo(init_opts=opts.InitOpts(width="100%", height="600px", theme=ThemeType.LIGHT))
-    geo.add_schema(maptype="重庆",
-        itemstyle_opts=opts.ItemStyleOpts(border_color="#fff", border_width=1, area_color="#F0F0F0"),
-        label_opts=opts.LabelOpts(is_show=True, color="#666", font_size=9),
-        emphasis_itemstyle_opts=opts.ItemStyleOpts(area_color="#E0E0E0"))
-
-    # 注册坐标 + 按组添加散点
+    # 构建房源数 + 价格查询表（自定义 tooltip 用）
+    detail_map = {}
     for _, row in stats.iterrows():
-        geo.add_coordinate(row["所属城区"], coord_dict[row["所属城区"]][0], coord_dict[row["所属城区"]][1])
+        d = row["所属城区"]
+        map_name = name_map.get(d, d)
+        detail_map[map_name] = {
+            "count": int(row["count"]),
+            "price": round(row["price"], 0)
+        }
+    import json as _json
+    detail_js = _json.dumps(detail_map, ensure_ascii=False)
 
-    # 构建 JS 数据：每个点的名称、大小额外编码在 symbolSize 中
-    import pyecharts.commons.utils as p_utils
-    size_js = _json.dumps(size_map, ensure_ascii=False)
-    count_js = _json.dumps({r["所属城区"]: int(r["count"]) for _, r in stats.iterrows()}, ensure_ascii=False)
-
-    for group_name in ["主城核心", "主城区", "其他区县"]:
-        subset = stats[stats["group"] == group_name]
-        if subset.empty:
-            continue
-        data_pairs = [(row["所属城区"], round(row["price"], 0)) for _, row in subset.iterrows()]
-
-        geo.add(
-            group_name,
+    chart = (
+        Map(init_opts=opts.InitOpts(width="100%", height="600px", theme=ThemeType.LIGHT))
+        .add(
+            "",
             data_pairs,
-            type_=GeoType.SCATTER,
-            symbol_size=JsCode(f"""
-                function(params) {{
-                    var sizeMap = {size_js};
-                    return sizeMap[params.name] || 10;
-                }}
-            """),
-            color=group_color[group_name],
-            label_opts=opts.LabelOpts(is_show=True, formatter="{b}", font_size=10, color="#333"),
+            maptype="重庆",
+            is_map_symbol_show=False,
+            label_opts=opts.LabelOpts(is_show=True, color="#333", font_size=10),
             tooltip_opts=opts.TooltipOpts(trigger="item",
                 formatter=JsCode(f"""
                     function(params) {{
-                        var countMap = {count_js};
-                        return params.name + '<br/>房源: ' + (countMap[params.name] || 0) + ' 套' + '<br/>均价: ' + params.value[2] + ' 元/㎡';
+                        var detail = {detail_js};
+                        var info = detail[params.name] || {{}};
+                        return params.name + '<br/>房源数: ' + (info.count || '-') + ' 套<br/>均价: ' + (info.price || '-') + ' 元/㎡';
                     }}
                 """)),
         )
-
-    geo.set_global_opts(
-        title_opts=opts.TitleOpts(
-            title="重庆各区县房源分布",
-            subtitle="圆点大小=房源数量 | 颜色=区域分组 | 悬停查看价格",
-            pos_left="center"),
-        tooltip_opts=opts.TooltipOpts(trigger="item"),
-        legend_opts=opts.LegendOpts(pos_bottom="5%", pos_left="center", orient="horizontal"),
+        .set_global_opts(
+            title_opts=opts.TitleOpts(
+                title="重庆各区县分布总览",
+                subtitle="鼠标悬停查看各区县房源数量和均价",
+                pos_left="center"
+            ),
+            tooltip_opts=opts.TooltipOpts(trigger="item"),
+            # 统一颜色
+            visualmap_opts=opts.VisualMapOpts(is_show=False),
+        )
+        .set_series_opts(
+            itemstyle_opts=opts.ItemStyleOpts(
+                color="#B0BEC5",
+                border_color="#fff",
+                border_width=1,
+            ),
+            emphasis_opts=opts.EmphasisOpts(
+                itemstyle_opts=opts.ItemStyleOpts(area_color="#90A4AE", border_color="#fff")
+            ),
+        )
     )
-    return geo
+    return chart
 
     # 建立名称映射
     name_map = _build_district_name_mapping()
