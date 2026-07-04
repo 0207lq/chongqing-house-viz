@@ -21,3 +21,8 @@ Thumbs.db
 # Test files
 _inspect_geo.py
 _test_*.py
+
+# Temp inspect files
+_inspect_*.py
+_test_*.py
+_check_*.py
