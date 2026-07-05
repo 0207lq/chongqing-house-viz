@@ -87,69 +87,6 @@ def create_chongqing_heatmap(df, price_col="均价_数值"):
     )
     return chart
 
-    # 建立名称映射
-    name_map = _build_district_name_mapping()
-
-    # 构建数据对，将数据中的区名映射到地图中的标准区名
-    data_pairs = []
-    skipped = []
-    for _, row in district_avg.iterrows():
-        d = row["所属城区"]
-        map_name = name_map.get(d, d)
-        if map_name != d or d in name_map or d.endswith("区") or d.endswith("县"):
-            data_pairs.append((map_name, round(row[price_col], 0)))
-        else:
-            skipped.append(d)
-
-    if not data_pairs:
-        return _empty_chart("暂无匹配的地图数据")
-
-    # 找到价格范围用于颜色映射
-    prices = [p[1] for p in data_pairs]
-    vmin, vmax = min(prices), max(prices)
-
-    chart = (
-        Map(init_opts=opts.InitOpts(width="100%", height="600px", theme=ThemeType.LIGHT))
-        .add(
-            "均价 (元/㎡)",
-            data_pairs,
-            maptype="重庆",
-            is_map_symbol_show=False,
-            label_opts=opts.LabelOpts(is_show=True, color="#333", font_size=10),
-            tooltip_opts=opts.TooltipOpts(trigger="item", formatter="{b}<br/>均价: {c} 元/㎡"),
-        )
-        .set_global_opts(
-            title_opts=opts.TitleOpts(
-                title="重庆各区房价分布",
-                subtitle="颜色越深 → 房价越高 | 鼠标悬停查看详情",
-                pos_left="center"
-            ),
-            visualmap_opts=opts.VisualMapOpts(
-                is_piecewise=False,
-                min_=vmin,
-                max_=vmax,
-                range_color=["#f0f9e8", "#bae4bc", "#7bccc4", "#43a2ca", "#0868ac"],
-                pos_left="left",
-                pos_bottom="bottom",
-                textstyle_opts=opts.TextStyleOpts(color="#333"),
-            ),
-            tooltip_opts=opts.TooltipOpts(trigger="item", formatter="{b}<br/>均价: {c} 元/㎡"),
-        )
-        .set_series_opts(
-            itemstyle_opts=opts.ItemStyleOpts(border_color="#fff", border_width=1),
-            emphasis_opts=opts.EmphasisOpts(
-                itemstyle_opts=opts.ItemStyleOpts(area_color="#FF6F00", border_color="#fff")
-            ),
-        )
-    )
-
-    # 如果有跳过的区县，添加注释
-    if skipped:
-        # 图表底部加一行注释（可选）
-        pass
-
-    return chart
-
 
 # ==================== 2. 价格分布柱状图 ====================
 

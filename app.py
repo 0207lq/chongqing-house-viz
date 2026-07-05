@@ -103,7 +103,7 @@ def render_sidebar():
         st.markdown("---")
         if st.button("🔄 重置所有筛选", use_container_width=True):
             st.rerun()
-        st.caption("📌 v2.0 | 链家/贝壳重庆站")
+        st.caption("📌 v2.0 | 安居客重庆站")
 
         return {
             "districts": selected_districts, "price_range": price_range,
@@ -269,7 +269,7 @@ def render_overview_tab(df):
     with st.expander("ℹ️ 关于本项目", expanded=False):
         st.markdown("""
         **重庆二手房数据可视化平台**
-        - 数据来源：链家/贝壳重庆站二手房数据
+        - 数据来源：安居客重庆站二手房数据
         - 技术栈：Python + Streamlit + Pyecharts + scikit-learn
         - 数据量：167,297 条房源（5年），覆盖 37 个区县
         - 功能：数据概览、排行榜、图表分析、房价预测、房源分类
@@ -618,7 +618,7 @@ def main():
         render_data_tab(filtered_df)
 
     st.markdown("---")
-    st.caption("© 2026 重庆二手房数据分析项目 | 链家/贝壳 | Streamlit + Pyecharts + scikit-learn")
+    st.caption("© 2026 重庆二手房数据分析项目 | 安居客 | Streamlit + Pyecharts + scikit-learn")
 
 
 if __name__ == "__main__":
